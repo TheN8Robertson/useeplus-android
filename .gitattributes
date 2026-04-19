@@ -1,0 +1,13 @@
+# Normalize line endings: LF in the repo, convert on checkout per platform.
+* text=auto eol=lf
+
+# Binary / checked-in-verbatim
+*.jks binary
+*.keystore binary
+*.png binary
+*.jpg binary
+*.webp binary
+
+# Windows-only scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf

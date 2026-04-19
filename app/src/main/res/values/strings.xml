@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">USEEPLUS Endoscope</string>
+    <string name="status_no_device">No USEEPLUS device connected. Plug in the endoscope.</string>
+    <string name="status_awaiting_permission">Waiting for USB permission…</string>
+    <string name="status_streaming">Streaming</string>
+    <string name="status_stopped">Stopped</string>
+    <string name="action_snapshot">Snapshot</string>
+    <string name="action_record_start">Record</string>
+    <string name="action_record_stop">Stop Recording</string>
+    <string name="led_brightness">LED Brightness</string>
+    <string name="select_device">Device</string>
+    <string name="msg_snapshot_saved">Snapshot saved to Pictures/USEEPLUS</string>
+    <string name="msg_video_saved">Video saved to Movies/USEEPLUS</string>
+    <string name="msg_led_stub">LED control not yet reverse-engineered</string>
+</resources>
