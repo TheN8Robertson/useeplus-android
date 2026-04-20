@@ -287,7 +287,29 @@ public:
                 frame.length);
         }
 
+        // Physical endoscope button may be signaled in either lens's packet
+        // stream; honor it regardless of the currently selected cam.
+        if (cam_part.button_press && button_callback_) {
+            button_callback_();
+        }
+
         const uint8_t target = target_cam_num_.load(std::memory_order_relaxed);
+
+        // Discard non-target-cam packets completely. Cam 0 and cam 1 have
+        // independent fid counters, so a cam-0 packet with a "different" fid
+        // would otherwise trigger the emit-on-fid-change logic below and
+        // flush a half-accumulated cam-1 JPEG — which BitmapFactory then
+        // fails to decode. Dropping foreign packets here keeps the
+        // accumulator seeing only one interleaved stream.
+        if (cam_part.cam_num != target) {
+            return;
+        }
+
+        // If the target just changed, the buffer may still hold data from
+        // the previous lens. Throw it out rather than splicing.
+        if (!camera_buffer_.empty() && cam_header_.cam_num != target) {
+            camera_buffer_.clear();
+        }
 
         if (!camera_buffer_.empty() && cam_header_.fid != cam_part.fid) {
             emit_frame();
@@ -295,26 +317,15 @@ public:
 
         if (camera_buffer_.empty()) {
             cam_header_ = cam_part;
-            // Only require cam_num match on entry. jmz3's has_g==0 / other==0
-            // sanity check was based on single-cam firmware observations; the
-            // dual-cam variant sets those bits differently for lens 2, and
-            // rejecting them here was dropping every cam-2 frame.
-            if (cam_header_.cam_num != target) {
-                return;
-            }
         } else {
-            // Within a frame, require the full header to stay consistent so
-            // we don't splice chunks from a different lens or frame type.
+            // Within a frame, require the header to stay stable so we don't
+            // splice chunks from a different frame type.
             if (!((cam_header_.fid == cam_part.fid) &&
                   (cam_header_.cam_num == cam_part.cam_num) &&
                   (cam_header_.has_g == cam_part.has_g) &&
                   (cam_header_.other == cam_part.other))) {
                 return;
             }
-        }
-
-        if (cam_part.button_press && button_callback_) {
-            button_callback_();
         }
 
         const auto cam_data_start =
