@@ -23,24 +23,24 @@ USEEPLUS endoscopes (USB IDs `2ce3:3828` and `0329:2022`) use a proprietary USB 
 | LED brightness slider | **stub** — protocol not yet reverse-engineered |
 | Dual-cam (left/right) split view | single-cam only in v0.1 |
 
-## Build
+## Install
 
-You do **not** need Android Studio. Every push to `main` builds a debug APK in GitHub Actions:
+Every push to `main` cuts a signed GitHub release. The release keystore is stable (stored in repo secrets) so the APK signature stays consistent across builds — in-place upgrades work.
 
-1. Push to `main` (or open a PR).
-2. Open the run under **Actions → Build APK**.
-3. Download the `useeplus-endoscope-debug-<sha>` artifact — that's the APK.
-4. Install via Obtainium, `adb install`, or sideload directly.
+**Obtainium (recommended on GrapheneOS):**
+1. Add app → paste the repo URL: `https://github.com/TheN8Robertson/useeplus-android`
+2. Obtainium will poll **Releases** and install `useeplus-endoscope-vX.Y.Z.apk` when versions bump.
 
-To build locally anyway: install Android Studio + NDK `27.2.12479018`, then `./gradlew assembleDebug`.
+**Manual:**
+1. Go to [**Releases**](https://github.com/TheN8Robertson/useeplus-android/releases) → latest → download the `.apk`.
+2. Open it with a file manager / `adb install`.
+3. On first plug-in of the endoscope, GrapheneOS prompts for USB permission — grant it.
 
-## Install on GrapheneOS
+Versioning: `versionCode` tracks `git rev-list --count HEAD`; `versionName` is `0.2.<count>`. Every push to `main` gets a new release tag.
 
-1. Enable **Settings → Apps → Install unknown apps** for your chosen file manager.
-2. Open the downloaded `.apk`.
-3. On first plug-in of the endoscope, GrapheneOS will prompt for USB permission — grant it to the app.
+## Build locally (optional)
 
-Apk is debug-signed (ephemeral keystore per CI run). That means each CI build has a different signing certificate, so upgrading requires uninstalling first. Wire up a release keystore in GitHub Secrets if you want stable upgrades — see *Release signing* below.
+You do **not** need Android Studio to get an APK — see *Install* above. To build locally anyway: install a JDK 17 + Android SDK + NDK `27.2.12479018`, then `./gradlew assembleRelease`. Without the release keystore env vars, the release build falls back to debug signing (fine for local testing, bad for Obtainium upgrades).
 
 ## Architecture
 
@@ -92,12 +92,26 @@ plumbing required to feed a MediaCodec input surface. Planned for v0.2.
 
 ## Release signing
 
-To get stable-upgrade signing:
+Release signing is wired up via four GitHub Actions secrets:
 
-1. Locally: `keytool -genkeypair -v -keystore release.jks -alias useeplus -keyalg RSA -keysize 4096 -validity 10000`
-2. Base64 encode: `base64 release.jks > release.jks.b64`
-3. Add four GitHub Actions secrets: `RELEASE_KEYSTORE_B64`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`.
-4. Adjust `app/build.gradle.kts` and `.github/workflows/build.yml` to decode the keystore and run `assembleRelease` with that signing config. (Not wired up in v0.1 — keeps the debug path simple.)
+- `RELEASE_KEYSTORE_B64` — base64-encoded JKS keystore
+- `RELEASE_KEYSTORE_PASSWORD`
+- `RELEASE_KEY_ALIAS`
+- `RELEASE_KEY_PASSWORD`
+
+To rotate the keystore:
+
+```bash
+keytool -genkeypair -v -keystore release.jks -alias useeplus \
+        -keyalg RSA -keysize 4096 -validity 10000
+base64 -w0 release.jks | gh secret set RELEASE_KEYSTORE_B64 \
+        --repo TheN8Robertson/useeplus-android
+gh secret set RELEASE_KEYSTORE_PASSWORD --repo TheN8Robertson/useeplus-android
+gh secret set RELEASE_KEY_ALIAS --repo TheN8Robertson/useeplus-android
+gh secret set RELEASE_KEY_PASSWORD --repo TheN8Robertson/useeplus-android
+```
+
+Rotating the keystore **invalidates the existing install** — Obtainium users will need to uninstall and reinstall, since Android rejects signature changes.
 
 ## License
 

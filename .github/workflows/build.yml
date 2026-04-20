@@ -8,16 +8,18 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # needed to create releases
 
 jobs:
   build:
-    name: Build debug APK
+    name: Build release APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history so git rev-list --count works
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -45,24 +47,61 @@ jobs:
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version 8.10.2
 
-      - name: Build debug APK
-        run: ./gradlew --no-daemon assembleDebug
+      - name: Decode release keystore
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$RELEASE_KEYSTORE_B64" ]; then
+            echo "::warning::RELEASE_KEYSTORE_B64 not set; build will be unsigned-debug."
+            exit 0
+          fi
+          echo "$RELEASE_KEYSTORE_B64" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
+
+      - name: Build release APK
+        env:
+          USEEPLUS_KEYSTORE_PATH: ${{ github.workspace }}/release.jks
+          USEEPLUS_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          USEEPLUS_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          USEEPLUS_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Read version
+        id: version
+        run: |
+          COUNT=$(git rev-list --count HEAD)
+          NAME="v0.2.${COUNT}"
+          echo "tag=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
 
       - name: Locate APK
         id: apk
         run: |
-          APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n1)
+          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n1)
           if [ -z "$APK" ]; then
             echo "APK not found" >&2
+            find app/build/outputs -name "*.apk" >&2 || true
             exit 1
           fi
-          echo "path=$APK" >> "$GITHUB_OUTPUT"
-          echo "APK: $APK"
+          NAMED="useeplus-endoscope-${{ steps.version.outputs.name }}.apk"
+          cp "$APK" "$NAMED"
+          echo "path=$NAMED" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: useeplus-endoscope-debug-${{ github.sha }}
+          name: useeplus-endoscope-${{ steps.version.outputs.name }}
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 30
+
+      - name: Create GitHub release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.name }}
+          generate_release_notes: true
+          files: ${{ steps.apk.outputs.path }}
+          fail_on_unmatched_files: true

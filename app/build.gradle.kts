@@ -1,7 +1,26 @@
+import java.io.ByteArrayOutputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+fun gitCommitCount(): Int {
+    return try {
+        val out = ByteArrayOutputStream()
+        val proc = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        proc.inputStream.copyTo(out)
+        proc.waitFor()
+        out.toString().trim().toIntOrNull() ?: 1
+    } catch (_: Exception) {
+        1
+    }
+}
+
+val gitCount = gitCommitCount()
 
 android {
     namespace = "com.naterobertson.useeplus"
@@ -12,8 +31,8 @@ android {
         applicationId = "com.naterobertson.useeplus"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = gitCount
+        versionName = "0.2.$gitCount"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -36,13 +55,31 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("USEEPLUS_KEYSTORE_PATH")
+            if (!keystorePath.isNullOrEmpty() && file(keystorePath).exists()) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("USEEPLUS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("USEEPLUS_KEY_ALIAS")
+                keyPassword = System.getenv("USEEPLUS_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            // Use the release signing config if USEEPLUS_KEYSTORE_PATH is set
+            // (CI), otherwise fall back to the debug config so that
+            // `./gradlew assembleRelease` still works locally without a
+            // provisioned keystore.
+            val releaseCfg = signingConfigs.getByName("release")
+            signingConfig = if (releaseCfg.storeFile != null) releaseCfg
+                            else signingConfigs.getByName("debug")
         }
     }
 
