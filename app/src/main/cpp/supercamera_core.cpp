@@ -195,6 +195,10 @@ class UPPCameraParser {
     ByteVector camera_buffer_;
     upp_cam_frame_t cam_header_ = {};
     uint32_t frame_id_ = 0;
+    // Log the first packet we see for each cam_num so we can eyeball the
+    // header layout (has_g / button_press / other / g_sensor) on real
+    // hardware. Single-shot per cam.
+    bool logged_first_[2] = {false, false};
 
     // References into parent-owned atomics, set once at construction.
     std::atomic<uint8_t> &target_cam_num_;
@@ -272,6 +276,17 @@ public:
         if (cam_part.cam_num == 0) packets_cam0_.fetch_add(1, std::memory_order_relaxed);
         else if (cam_part.cam_num == 1) packets_cam1_.fetch_add(1, std::memory_order_relaxed);
 
+        // One-shot header log per cam, for reverse-engineering.
+        if (cam_part.cam_num < 2 && !logged_first_[cam_part.cam_num]) {
+            logged_first_[cam_part.cam_num] = true;
+            __android_log_print(
+                ANDROID_LOG_INFO, "useeplus-core",
+                "first cam%u packet: fid=%u has_g=%u button=%u other=%u g_sensor=0x%08x len=%u",
+                cam_part.cam_num, cam_part.fid, cam_part.has_g,
+                cam_part.button_press, cam_part.other, cam_part.g_sensor,
+                frame.length);
+        }
+
         const uint8_t target = target_cam_num_.load(std::memory_order_relaxed);
 
         if (!camera_buffer_.empty() && cam_header_.fid != cam_part.fid) {
@@ -280,12 +295,16 @@ public:
 
         if (camera_buffer_.empty()) {
             cam_header_ = cam_part;
-            if (!((cam_header_.cam_num == target) &&
-                  (cam_header_.has_g == 0) &&
-                  (cam_header_.other == 0))) {
+            // Only require cam_num match on entry. jmz3's has_g==0 / other==0
+            // sanity check was based on single-cam firmware observations; the
+            // dual-cam variant sets those bits differently for lens 2, and
+            // rejecting them here was dropping every cam-2 frame.
+            if (cam_header_.cam_num != target) {
                 return;
             }
         } else {
+            // Within a frame, require the full header to stay consistent so
+            // we don't splice chunks from a different lens or frame type.
             if (!((cam_header_.fid == cam_part.fid) &&
                   (cam_header_.cam_num == cam_part.cam_num) &&
                   (cam_header_.has_g == cam_part.has_g) &&
