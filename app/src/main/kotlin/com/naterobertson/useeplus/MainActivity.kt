@@ -38,13 +38,13 @@ class MainActivity : AppCompatActivity() {
     private var connection: UsbDeviceConnection? = null
     private var captureHandle: Long = 0L
     private var pollJob: Job? = null
+    private var statusJob: Job? = null
     private var videoRecorder: VideoRecorder? = null
     private var currentDevice: UsbDevice? = null
     private var currentCamNum: Int = 0
 
-    private var frameCounter = 0
-    private var lastFpsMillis = System.currentTimeMillis()
-    private var measuredFps = 0.0
+    // Sliding 1s window of frame-arrival timestamps → fps.
+    private val frameTimestamps = ArrayDeque<Long>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -161,6 +161,7 @@ class MainActivity : AppCompatActivity() {
 
         status.setText(R.string.status_streaming)
         startPollLoop()
+        startStatusLoop()
     }
 
     private fun startPollLoop() {
@@ -169,14 +170,7 @@ class MainActivity : AppCompatActivity() {
             while (isActive) {
                 val handle = captureHandle
                 if (handle == 0L) break
-
-                if (NativeBridge.nativeIsStopped(handle)) {
-                    val err = NativeBridge.nativeTakeError(handle)
-                    lifecycleScope.launch(Dispatchers.Main) {
-                        status.text = "Capture stopped${err?.let { ": $it" } ?: ""}"
-                    }
-                    break
-                }
+                if (NativeBridge.nativeIsStopped(handle)) break
 
                 if (NativeBridge.nativeConsumeButton(handle)) {
                     lifecycleScope.launch(Dispatchers.Main) { onSnapshot() }
@@ -186,40 +180,71 @@ class MainActivity : AppCompatActivity() {
                 if (frame != null) {
                     preview.pushJpeg(frame)
                     videoRecorder?.pushJpeg(frame)
-                    tickFps()
+                    registerFrame()
                 }
                 delay(8)
             }
         }
     }
 
-    private fun tickFps() {
-        frameCounter++
-        val now = System.currentTimeMillis()
-        val elapsed = now - lastFpsMillis
-        if (elapsed >= 1000) {
-            measuredFps = frameCounter * 1000.0 / elapsed
-            frameCounter = 0
-            lastFpsMillis = now
-            val handle = captureHandle
-            val counts = if (handle != 0L) NativeBridge.nativeGetPacketCounts(handle) else null
-            lifecycleScope.launch(Dispatchers.Main) {
-                val base = "Streaming — %.1f fps · cam%d".format(measuredFps, currentCamNum + 1)
+    // Status bar refresh runs on its own cadence so the diagnostic packet
+    // counters stay live even when the selected cam has stopped yielding
+    // frames (e.g., flipping to Cam 2 on hardware that only streams Cam 1).
+    private fun startStatusLoop() {
+        statusJob?.cancel()
+        statusJob = lifecycleScope.launch(Dispatchers.Main) {
+            while (isActive) {
+                val handle = captureHandle
+                if (handle == 0L) {
+                    delay(500); continue
+                }
+                if (NativeBridge.nativeIsStopped(handle)) {
+                    val err = NativeBridge.nativeTakeError(handle)
+                    status.text = "Capture stopped${err?.let { ": $it" } ?: ""}"
+                    break
+                }
+                val counts = NativeBridge.nativeGetPacketCounts(handle)
+                val fps = computeFps()
+                val base = "cam${currentCamNum + 1} · %.1f fps".format(fps)
                 status.text = if (counts != null && counts.size == 2)
                     "$base · pkts c1:${counts[0]} c2:${counts[1]}"
                 else base
+                delay(500)
             }
+        }
+    }
+
+    private fun registerFrame() {
+        val now = System.currentTimeMillis()
+        synchronized(frameTimestamps) {
+            frameTimestamps.addLast(now)
+            while (frameTimestamps.isNotEmpty() && now - frameTimestamps.first() > 1000) {
+                frameTimestamps.removeFirst()
+            }
+        }
+    }
+
+    private fun computeFps(): Double {
+        val now = System.currentTimeMillis()
+        synchronized(frameTimestamps) {
+            while (frameTimestamps.isNotEmpty() && now - frameTimestamps.first() > 1000) {
+                frameTimestamps.removeFirst()
+            }
+            return frameTimestamps.size.toDouble()
         }
     }
 
     private fun stopCapture() {
         pollJob?.cancel()
         pollJob = null
+        statusJob?.cancel()
+        statusJob = null
         val handle = captureHandle
         captureHandle = 0L
         if (handle != 0L) NativeBridge.nativeDestroy(handle)
         connection?.close()
         connection = null
+        synchronized(frameTimestamps) { frameTimestamps.clear() }
     }
 
     private fun onSnapshot() {
