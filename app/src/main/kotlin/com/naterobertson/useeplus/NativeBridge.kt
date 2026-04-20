@@ -11,4 +11,6 @@ object NativeBridge {
     @JvmStatic external fun nativeConsumeButton(handle: Long): Boolean
     @JvmStatic external fun nativeIsStopped(handle: Long): Boolean
     @JvmStatic external fun nativeTakeError(handle: Long): String?
+    @JvmStatic external fun nativeSetCamNum(handle: Long, camNum: Int)
+    @JvmStatic external fun nativeGetPacketCounts(handle: Long): IntArray?
 }

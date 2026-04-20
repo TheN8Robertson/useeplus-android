@@ -201,8 +201,13 @@ class MainActivity : AppCompatActivity() {
             measuredFps = frameCounter * 1000.0 / elapsed
             frameCounter = 0
             lastFpsMillis = now
+            val handle = captureHandle
+            val counts = if (handle != 0L) NativeBridge.nativeGetPacketCounts(handle) else null
             lifecycleScope.launch(Dispatchers.Main) {
-                status.text = "Streaming — %.1f fps".format(measuredFps)
+                val base = "Streaming — %.1f fps · cam%d".format(measuredFps, currentCamNum + 1)
+                status.text = if (counts != null && counts.size == 2)
+                    "$base · pkts c1:${counts[0]} c2:${counts[1]}"
+                else base
             }
         }
     }
@@ -252,14 +257,11 @@ class MainActivity : AppCompatActivity() {
     private fun onToggleCam() {
         currentCamNum = if (currentCamNum == 0) 1 else 0
         updateCamToggleLabel()
-        // Tear down the native capture + USB connection and reopen with the
-        // new cam_num filter. If the hardware streams both cams simultaneously
-        // this will switch streams within a second; if only cam 0 streams,
-        // the view will stop updating and we'll know cam 1 needs an
-        // activation command we haven't reverse-engineered yet.
-        val dev = currentDevice ?: return
-        stopCapture()
-        openAndStart(dev)
+        // Live-switch the cam filter without tearing down USB. The USEEPLUS
+        // firmware rejects a second init sequence on the same physical
+        // connection, so re-initing breaks subsequent toggles.
+        val handle = captureHandle
+        if (handle != 0L) NativeBridge.nativeSetCamNum(handle, currentCamNum)
     }
 
     private fun updateCamToggleLabel() {

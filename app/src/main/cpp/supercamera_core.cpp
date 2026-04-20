@@ -6,6 +6,7 @@
 
 #include "supercamera_core.hpp"
 
+#include <android/log.h>
 #include <bit>
 #include <chrono>
 #include <cstddef>
@@ -17,6 +18,9 @@
 #include <vector>
 
 #include <libusb.h>
+
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "useeplus-core", __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "useeplus-core", __VA_ARGS__)
 
 namespace supercamera {
 namespace {
@@ -66,7 +70,6 @@ class UsbSupercamera {
 public:
     explicit UsbSupercamera(int usb_fd) {
         try {
-            // On Android we cannot scan /dev/bus/usb; the JVM supplies an FD.
             libusb_set_option(nullptr, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
 
             int ret = libusb_init(&ctx_);
@@ -86,38 +89,55 @@ public:
 
             ret = libusb_claim_interface(handle_, INTERFACE_A_NUMBER);
             if (ret < 0) {
-                throw std::runtime_error("claim_interface A failed");
+                std::ostringstream ss;
+                ss << "claim_interface A failed: " << libusb_error_name(ret);
+                throw std::runtime_error(ss.str());
             }
             interface_a_claimed_ = true;
 
             ret = libusb_claim_interface(handle_, INTERFACE_B_NUMBER);
             if (ret < 0) {
-                throw std::runtime_error("claim_interface B failed");
+                std::ostringstream ss;
+                ss << "claim_interface B failed: " << libusb_error_name(ret);
+                throw std::runtime_error(ss.str());
             }
             interface_b_claimed_ = true;
 
             ret = libusb_set_interface_alt_setting(
                 handle_, INTERFACE_B_NUMBER, INTERFACE_B_ALTERNATE_SETTING);
             if (ret < 0) {
-                throw std::runtime_error("set_interface_alt_setting failed");
+                std::ostringstream ss;
+                ss << "set_interface_alt_setting failed: "
+                   << libusb_error_name(ret);
+                throw std::runtime_error(ss.str());
             }
 
             ret = libusb_clear_halt(handle_, ENDPOINT_1);
             if (ret < 0) {
-                throw std::runtime_error("clear_halt EP1 failed");
+                std::ostringstream ss;
+                ss << "clear_halt EP1 failed: " << libusb_error_name(ret);
+                throw std::runtime_error(ss.str());
             }
 
             const ByteVector ep2_buf = {0xFF, 0x55, 0xFF, 0x55, 0xEE, 0x10};
             ret = usb_write(ENDPOINT_2, ep2_buf);
             if (ret != 0) {
-                throw std::runtime_error("start sequence EP2 failed");
+                std::ostringstream ss;
+                ss << "start sequence EP2 failed: "
+                   << libusb_error_name(ret);
+                throw std::runtime_error(ss.str());
             }
 
             const ByteVector start_stream = {0xBB, 0xAA, 5, 0, 0};
             ret = usb_write(ENDPOINT_1, start_stream);
             if (ret != 0) {
-                throw std::runtime_error("start stream command failed");
+                std::ostringstream ss;
+                ss << "start stream command failed: "
+                   << libusb_error_name(ret);
+                throw std::runtime_error(ss.str());
             }
+
+            LOGI("USB init sequence succeeded");
         } catch (...) {
             cleanup();
             throw;
@@ -173,9 +193,13 @@ class UPPCameraParser {
     static constexpr uint8_t UPP_CAMID_11 = 11;
 
     ByteVector camera_buffer_;
-    uint8_t target_cam_num_ = 0;
     upp_cam_frame_t cam_header_ = {};
     uint32_t frame_id_ = 0;
+
+    // References into parent-owned atomics, set once at construction.
+    std::atomic<uint8_t> &target_cam_num_;
+    std::atomic<uint32_t> &packets_cam0_;
+    std::atomic<uint32_t> &packets_cam1_;
 
     FrameCallback frame_callback_;
     ButtonCallback button_callback_;
@@ -192,7 +216,7 @@ class UPPCameraParser {
         }
         CapturedFrame frame = {
             .jpeg = camera_buffer_,
-            .source_id = target_cam_num_,
+            .source_id = cam_header_.cam_num,
             .frame_id = frame_id_++,
             .timestamp_us = now_us(),
         };
@@ -203,8 +227,12 @@ class UPPCameraParser {
 public:
     UPPCameraParser(FrameCallback frame_callback,
                     ButtonCallback button_callback,
-                    uint8_t target_cam_num)
+                    std::atomic<uint8_t> &target_cam_num,
+                    std::atomic<uint32_t> &packets_cam0,
+                    std::atomic<uint32_t> &packets_cam1)
         : target_cam_num_(target_cam_num),
+          packets_cam0_(packets_cam0),
+          packets_cam1_(packets_cam1),
           frame_callback_(std::move(frame_callback)),
           button_callback_(std::move(button_callback)) {}
 
@@ -240,16 +268,19 @@ public:
         upp_cam_frame_t cam_part = {};
         std::memcpy(&cam_part, data.data() + usb_header_len, cam_header_len);
 
+        // Diagnostic: count every well-formed packet by cam_num.
+        if (cam_part.cam_num == 0) packets_cam0_.fetch_add(1, std::memory_order_relaxed);
+        else if (cam_part.cam_num == 1) packets_cam1_.fetch_add(1, std::memory_order_relaxed);
+
+        const uint8_t target = target_cam_num_.load(std::memory_order_relaxed);
+
         if (!camera_buffer_.empty() && cam_header_.fid != cam_part.fid) {
             emit_frame();
         }
 
         if (camera_buffer_.empty()) {
             cam_header_ = cam_part;
-            // Only accept frames from the requested cam. Dual-lens endoscopes
-            // interleave packets from cam 0 and cam 1; this filter discards
-            // the non-selected stream.
-            if (!((cam_header_.cam_num == target_cam_num_) &&
+            if (!((cam_header_.cam_num == target) &&
                   (cam_header_.has_g == 0) &&
                   (cam_header_.other == 0))) {
                 return;
@@ -291,7 +322,7 @@ struct SupercameraCapture::Impl {
 SupercameraCapture::SupercameraCapture(int usb_fd, uint8_t cam_num,
                                        ButtonCallback button_callback)
     : impl_(std::make_unique<Impl>(usb_fd)),
-      cam_num_(cam_num),
+      target_cam_num_(cam_num),
       button_callback_(std::move(button_callback)) {}
 
 SupercameraCapture::~SupercameraCapture() = default;
@@ -304,7 +335,8 @@ void SupercameraCapture::run(const FrameCallback &frame_callback) {
     }
 
     stop_requested_ = false;
-    UPPCameraParser parser(frame_callback, button_callback_, cam_num_);
+    UPPCameraParser parser(frame_callback, button_callback_,
+                           target_cam_num_, packets_cam0_, packets_cam1_);
     ByteVector read_buf;
 
     while (!stop_requested_) {
@@ -314,13 +346,13 @@ void SupercameraCapture::run(const FrameCallback &frame_callback) {
             continue;
         }
         if (ret == LIBUSB_ERROR_NO_DEVICE) {
+            LOGE("USB read returned NO_DEVICE, exiting capture");
             break;
         }
         if (ret == LIBUSB_ERROR_TIMEOUT) {
             continue;
         }
-        // Other errors: retry briefly. Hard failures will eventually get
-        // NO_DEVICE and break.
+        // Other errors: soft-retry.
     }
 
     parser.flush_pending();

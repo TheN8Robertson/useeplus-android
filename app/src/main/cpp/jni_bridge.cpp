@@ -6,7 +6,6 @@
 #include <android/log.h>
 #include <atomic>
 #include <cstdint>
-#include <deque>
 #include <exception>
 #include <jni.h>
 #include <memory>
@@ -70,6 +69,12 @@ public:
     }
 
     bool is_stopped() const { return stopped_.load(); }
+
+    void set_cam_num(uint8_t cam_num) { capture_.set_cam_num(cam_num); }
+
+    uint32_t packets_cam(uint8_t cam_num) const {
+        return capture_.packets_seen_cam(cam_num);
+    }
 
     std::string take_error() {
         std::lock_guard lock(error_mutex_);
@@ -170,6 +175,29 @@ Java_com_naterobertson_useeplus_NativeBridge_nativeTakeError(
     std::string err = capture->take_error();
     if (err.empty()) return nullptr;
     return env->NewStringUTF(err.c_str());
+}
+
+JNIEXPORT void JNICALL
+Java_com_naterobertson_useeplus_NativeBridge_nativeSetCamNum(
+    JNIEnv * /*env*/, jclass /*clazz*/, jlong handle, jint cam_num) {
+    auto *capture = from_handle(handle);
+    if (!capture) return;
+    capture->set_cam_num(static_cast<uint8_t>(cam_num));
+}
+
+JNIEXPORT jintArray JNICALL
+Java_com_naterobertson_useeplus_NativeBridge_nativeGetPacketCounts(
+    JNIEnv *env, jclass /*clazz*/, jlong handle) {
+    auto *capture = from_handle(handle);
+    if (!capture) return nullptr;
+    jint values[2] = {
+        static_cast<jint>(capture->packets_cam(0)),
+        static_cast<jint>(capture->packets_cam(1)),
+    };
+    jintArray arr = env->NewIntArray(2);
+    if (!arr) return nullptr;
+    env->SetIntArrayRegion(arr, 0, 2, values);
+    return arr;
 }
 
 } // extern "C"
