@@ -33,11 +33,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var ledSeek: SeekBar
     private lateinit var snapshotBtn: MaterialButton
     private lateinit var recordBtn: MaterialButton
+    private lateinit var camToggleBtn: MaterialButton
 
     private var connection: UsbDeviceConnection? = null
     private var captureHandle: Long = 0L
     private var pollJob: Job? = null
     private var videoRecorder: VideoRecorder? = null
+    private var currentDevice: UsbDevice? = null
+    private var currentCamNum: Int = 0
 
     private var frameCounter = 0
     private var lastFpsMillis = System.currentTimeMillis()
@@ -53,6 +56,10 @@ class MainActivity : AppCompatActivity() {
         ledSeek = findViewById(R.id.ledSeek)
         snapshotBtn = findViewById(R.id.snapshotBtn)
         recordBtn = findViewById(R.id.recordBtn)
+        camToggleBtn = findViewById(R.id.camToggleBtn)
+        updateCamToggleLabel()
+
+        camToggleBtn.setOnClickListener { onToggleCam() }
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         permissionHelper = UsbPermissionHelper(this)
@@ -130,13 +137,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openAndStart(device: UsbDevice) {
+        currentDevice = device
         val conn = usbManager.openDevice(device) ?: run {
             status.text = "openDevice failed"
             return
         }
         connection = conn
         try {
-            captureHandle = NativeBridge.nativeInit(conn.fileDescriptor, 0)
+            captureHandle = NativeBridge.nativeInit(conn.fileDescriptor, currentCamNum)
         } catch (t: Throwable) {
             Log.e(TAG, "nativeInit threw", t)
             status.text = "Native init failed: ${t.message}"
@@ -239,6 +247,23 @@ class MainActivity : AppCompatActivity() {
         recordBtn.setText(R.string.action_record_start)
         val msg = "Saved $frames frames to Pictures/USEEPLUS/${rec.folder}"
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+    }
+
+    private fun onToggleCam() {
+        currentCamNum = if (currentCamNum == 0) 1 else 0
+        updateCamToggleLabel()
+        // Tear down the native capture + USB connection and reopen with the
+        // new cam_num filter. If the hardware streams both cams simultaneously
+        // this will switch streams within a second; if only cam 0 streams,
+        // the view will stop updating and we'll know cam 1 needs an
+        // activation command we haven't reverse-engineered yet.
+        val dev = currentDevice ?: return
+        stopCapture()
+        openAndStart(dev)
+    }
+
+    private fun updateCamToggleLabel() {
+        camToggleBtn.text = getString(R.string.cam_label, currentCamNum + 1)
     }
 
     companion object {

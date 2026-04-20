@@ -173,7 +173,7 @@ class UPPCameraParser {
     static constexpr uint8_t UPP_CAMID_11 = 11;
 
     ByteVector camera_buffer_;
-    uint16_t source_id_ = 0;
+    uint8_t target_cam_num_ = 0;
     upp_cam_frame_t cam_header_ = {};
     uint32_t frame_id_ = 0;
 
@@ -192,7 +192,7 @@ class UPPCameraParser {
         }
         CapturedFrame frame = {
             .jpeg = camera_buffer_,
-            .source_id = source_id_,
+            .source_id = target_cam_num_,
             .frame_id = frame_id_++,
             .timestamp_us = now_us(),
         };
@@ -203,8 +203,8 @@ class UPPCameraParser {
 public:
     UPPCameraParser(FrameCallback frame_callback,
                     ButtonCallback button_callback,
-                    uint16_t source_id)
-        : source_id_(source_id),
+                    uint8_t target_cam_num)
+        : target_cam_num_(target_cam_num),
           frame_callback_(std::move(frame_callback)),
           button_callback_(std::move(button_callback)) {}
 
@@ -246,7 +246,11 @@ public:
 
         if (camera_buffer_.empty()) {
             cam_header_ = cam_part;
-            if (!((cam_header_.cam_num < 2) && (cam_header_.has_g == 0) &&
+            // Only accept frames from the requested cam. Dual-lens endoscopes
+            // interleave packets from cam 0 and cam 1; this filter discards
+            // the non-selected stream.
+            if (!((cam_header_.cam_num == target_cam_num_) &&
+                  (cam_header_.has_g == 0) &&
                   (cam_header_.other == 0))) {
                 return;
             }
@@ -284,10 +288,10 @@ struct SupercameraCapture::Impl {
     explicit Impl(int usb_fd) : usb(usb_fd) {}
 };
 
-SupercameraCapture::SupercameraCapture(int usb_fd, uint16_t source_id,
+SupercameraCapture::SupercameraCapture(int usb_fd, uint8_t cam_num,
                                        ButtonCallback button_callback)
     : impl_(std::make_unique<Impl>(usb_fd)),
-      source_id_(source_id),
+      cam_num_(cam_num),
       button_callback_(std::move(button_callback)) {}
 
 SupercameraCapture::~SupercameraCapture() = default;
@@ -300,7 +304,7 @@ void SupercameraCapture::run(const FrameCallback &frame_callback) {
     }
 
     stop_requested_ = false;
-    UPPCameraParser parser(frame_callback, button_callback_, source_id_);
+    UPPCameraParser parser(frame_callback, button_callback_, cam_num_);
     ByteVector read_buf;
 
     while (!stop_requested_) {

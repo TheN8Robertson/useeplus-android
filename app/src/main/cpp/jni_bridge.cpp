@@ -22,8 +22,8 @@ namespace {
 
 class AndroidCapture {
 public:
-    AndroidCapture(int fd, uint16_t source_id)
-        : capture_(fd, source_id, [this]() { button_pressed_ = true; }) {
+    AndroidCapture(int fd, uint8_t cam_num)
+        : capture_(fd, cam_num, [this]() { button_pressed_ = true; }) {
         worker_ = std::thread([this]() {
             try {
                 capture_.run([this](const supercamera::CapturedFrame &f) {
@@ -101,10 +101,10 @@ extern "C" {
 
 JNIEXPORT jlong JNICALL
 Java_com_naterobertson_useeplus_NativeBridge_nativeInit(
-    JNIEnv *env, jclass /*clazz*/, jint fd, jint source_id) {
+    JNIEnv *env, jclass /*clazz*/, jint fd, jint cam_num) {
     try {
         auto *capture = new AndroidCapture(
-            static_cast<int>(fd), static_cast<uint16_t>(source_id));
+            static_cast<int>(fd), static_cast<uint8_t>(cam_num));
         return static_cast<jlong>(reinterpret_cast<intptr_t>(capture));
     } catch (const std::exception &e) {
         LOGE("nativeInit failed: %s", e.what());

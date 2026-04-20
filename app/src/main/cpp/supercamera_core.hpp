@@ -32,8 +32,11 @@ public:
     // (from UsbDeviceConnection.getFileDescriptor()). Takes ownership only
     // for libusb_wrap_sys_device; the Java side must keep the
     // UsbDeviceConnection alive for the lifetime of this object.
+    //
+    // cam_num selects which camera of a dual-lens endoscope to keep (0 or 1).
+    // Packets from the non-selected cam are discarded by the parser.
     explicit SupercameraCapture(int usb_fd,
-                                uint16_t source_id = 0,
+                                uint8_t cam_num = 0,
                                 ButtonCallback button_callback = {});
     ~SupercameraCapture();
 
@@ -47,7 +50,7 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::atomic_bool stop_requested_ = false;
-    uint16_t source_id_ = 0;
+    uint8_t cam_num_ = 0;
     ButtonCallback button_callback_;
 };
 

@@ -5,7 +5,7 @@ object NativeBridge {
         System.loadLibrary("useeplus")
     }
 
-    @JvmStatic external fun nativeInit(fd: Int, sourceId: Int): Long
+    @JvmStatic external fun nativeInit(fd: Int, camNum: Int): Long
     @JvmStatic external fun nativeDestroy(handle: Long)
     @JvmStatic external fun nativePollFrame(handle: Long): ByteArray?
     @JvmStatic external fun nativeConsumeButton(handle: Long): Boolean
