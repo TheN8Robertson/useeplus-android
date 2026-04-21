@@ -9,7 +9,6 @@ import android.util.Log
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
-import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
@@ -30,7 +29,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var preview: PreviewView
     private lateinit var status: TextView
     private lateinit var deviceSpinner: Spinner
-    private lateinit var ledSeek: SeekBar
     private lateinit var snapshotBtn: MaterialButton
     private lateinit var recordBtn: MaterialButton
     private lateinit var camToggleBtn: MaterialButton
@@ -53,7 +51,6 @@ class MainActivity : AppCompatActivity() {
         preview = findViewById(R.id.preview)
         status = findViewById(R.id.status)
         deviceSpinner = findViewById(R.id.deviceSpinner)
-        ledSeek = findViewById(R.id.ledSeek)
         snapshotBtn = findViewById(R.id.snapshotBtn)
         recordBtn = findViewById(R.id.recordBtn)
         camToggleBtn = findViewById(R.id.camToggleBtn)
@@ -67,17 +64,6 @@ class MainActivity : AppCompatActivity() {
 
         snapshotBtn.setOnClickListener { onSnapshot() }
         recordBtn.setOnClickListener { onToggleRecord() }
-
-        ledSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                Toast.makeText(
-                    this@MainActivity, R.string.msg_led_stub, Toast.LENGTH_SHORT,
-                ).show()
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
-        })
 
         refreshDevices()
     }

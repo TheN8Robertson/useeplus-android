@@ -199,6 +199,9 @@ class UPPCameraParser {
     // header layout (has_g / button_press / other / g_sensor) on real
     // hardware. Single-shot per cam.
     bool logged_first_[2] = {false, false};
+    // Log the first few emitted JPEG sizes per cam for diagnostics.
+    int emit_log_count_[2] = {0, 0};
+    static constexpr int EMIT_LOG_LIMIT = 3;
 
     // References into parent-owned atomics, set once at construction.
     std::atomic<uint8_t> &target_cam_num_;
@@ -218,9 +221,26 @@ class UPPCameraParser {
         if (camera_buffer_.empty()) {
             return;
         }
+        const uint8_t cn = cam_header_.cam_num;
+        // Log size of first few emits per cam so we can compare cam-0 and
+        // cam-1 frame sizes; a truncated JPEG (decode failure downstream)
+        // would show up as a wildly different size here.
+        if (cn < 2 && emit_log_count_[cn] < EMIT_LOG_LIMIT) {
+            emit_log_count_[cn]++;
+            const uint8_t *p = camera_buffer_.data();
+            const size_t n = camera_buffer_.size();
+            const uint8_t b0 = n > 0 ? p[0] : 0;
+            const uint8_t b1 = n > 1 ? p[1] : 0;
+            const uint8_t bm2 = n >= 2 ? p[n - 2] : 0;
+            const uint8_t bm1 = n >= 1 ? p[n - 1] : 0;
+            __android_log_print(
+                ANDROID_LOG_INFO, "useeplus-core",
+                "emit cam%u fid=%u size=%zu first=%02x%02x last=%02x%02x",
+                cn, cam_header_.fid, n, b0, b1, bm2, bm1);
+        }
         CapturedFrame frame = {
             .jpeg = camera_buffer_,
-            .source_id = cam_header_.cam_num,
+            .source_id = cn,
             .frame_id = frame_id_++,
             .timestamp_us = now_us(),
         };
