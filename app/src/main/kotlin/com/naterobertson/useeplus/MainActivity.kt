@@ -31,15 +31,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var deviceSpinner: Spinner
     private lateinit var snapshotBtn: MaterialButton
     private lateinit var recordBtn: MaterialButton
-    private lateinit var camToggleBtn: MaterialButton
 
     private var connection: UsbDeviceConnection? = null
     private var captureHandle: Long = 0L
     private var pollJob: Job? = null
     private var statusJob: Job? = null
     private var videoRecorder: VideoRecorder? = null
-    private var currentDevice: UsbDevice? = null
-    private var currentCamNum: Int = 0
 
     // Sliding 1s window of frame-arrival timestamps → fps.
     private val frameTimestamps = ArrayDeque<Long>()
@@ -53,10 +50,6 @@ class MainActivity : AppCompatActivity() {
         deviceSpinner = findViewById(R.id.deviceSpinner)
         snapshotBtn = findViewById(R.id.snapshotBtn)
         recordBtn = findViewById(R.id.recordBtn)
-        camToggleBtn = findViewById(R.id.camToggleBtn)
-        updateCamToggleLabel()
-
-        camToggleBtn.setOnClickListener { onToggleCam() }
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         permissionHelper = UsbPermissionHelper(this)
@@ -123,14 +116,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openAndStart(device: UsbDevice) {
-        currentDevice = device
         val conn = usbManager.openDevice(device) ?: run {
             status.text = "openDevice failed"
             return
         }
         connection = conn
         try {
-            captureHandle = NativeBridge.nativeInit(conn.fileDescriptor, currentCamNum)
+            captureHandle = NativeBridge.nativeInit(conn.fileDescriptor)
         } catch (t: Throwable) {
             Log.e(TAG, "nativeInit threw", t)
             status.text = "Native init failed: ${t.message}"
@@ -173,9 +165,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Status bar refresh runs on its own cadence so the diagnostic packet
-    // counters stay live even when the selected cam has stopped yielding
-    // frames (e.g., flipping to Cam 2 on hardware that only streams Cam 1).
     private fun startStatusLoop() {
         statusJob?.cancel()
         statusJob = lifecycleScope.launch(Dispatchers.Main) {
@@ -189,12 +178,7 @@ class MainActivity : AppCompatActivity() {
                     status.text = "Capture stopped${err?.let { ": $it" } ?: ""}"
                     break
                 }
-                val counts = NativeBridge.nativeGetPacketCounts(handle)
-                val fps = computeFps()
-                val base = "cam${currentCamNum + 1} · %.1f fps".format(fps)
-                status.text = if (counts != null && counts.size == 2)
-                    "$base · pkts c1:${counts[0]} c2:${counts[1]}"
-                else base
+                status.text = "Streaming — %.1f fps".format(computeFps())
                 delay(500)
             }
         }
@@ -263,20 +247,6 @@ class MainActivity : AppCompatActivity() {
         recordBtn.setText(R.string.action_record_start)
         val msg = "Saved $frames frames to Pictures/USEEPLUS/${rec.folder}"
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-    }
-
-    private fun onToggleCam() {
-        currentCamNum = if (currentCamNum == 0) 1 else 0
-        updateCamToggleLabel()
-        // Live-switch the cam filter without tearing down USB. The USEEPLUS
-        // firmware rejects a second init sequence on the same physical
-        // connection, so re-initing breaks subsequent toggles.
-        val handle = captureHandle
-        if (handle != 0L) NativeBridge.nativeSetCamNum(handle, currentCamNum)
-    }
-
-    private fun updateCamToggleLabel() {
-        camToggleBtn.text = getString(R.string.cam_label, currentCamNum + 1)
     }
 
     companion object {

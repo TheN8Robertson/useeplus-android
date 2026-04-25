@@ -25,6 +25,11 @@
 namespace supercamera {
 namespace {
 
+// We only ever consume packets tagged with this cam_num. The dual-cam
+// firmware routes whichever lens is active through cam_num=0 — see the
+// project notes for the reverse-engineering trail.
+constexpr uint8_t TARGET_CAM_NUM = 0;
+
 class UsbSupercamera {
     static constexpr int INTERFACE_A_NUMBER = 0;
     static constexpr int INTERFACE_B_NUMBER = 1;
@@ -195,18 +200,6 @@ class UPPCameraParser {
     ByteVector camera_buffer_;
     upp_cam_frame_t cam_header_ = {};
     uint32_t frame_id_ = 0;
-    // Log the first packet we see for each cam_num so we can eyeball the
-    // header layout (has_g / button_press / other / g_sensor) on real
-    // hardware. Single-shot per cam.
-    bool logged_first_[2] = {false, false};
-    // Log the first few emitted JPEG sizes per cam for diagnostics.
-    int emit_log_count_[2] = {0, 0};
-    static constexpr int EMIT_LOG_LIMIT = 3;
-
-    // References into parent-owned atomics, set once at construction.
-    std::atomic<uint8_t> &target_cam_num_;
-    std::atomic<uint32_t> &packets_cam0_;
-    std::atomic<uint32_t> &packets_cam1_;
 
     FrameCallback frame_callback_;
     ButtonCallback button_callback_;
@@ -221,26 +214,8 @@ class UPPCameraParser {
         if (camera_buffer_.empty()) {
             return;
         }
-        const uint8_t cn = cam_header_.cam_num;
-        // Log size of first few emits per cam so we can compare cam-0 and
-        // cam-1 frame sizes; a truncated JPEG (decode failure downstream)
-        // would show up as a wildly different size here.
-        if (cn < 2 && emit_log_count_[cn] < EMIT_LOG_LIMIT) {
-            emit_log_count_[cn]++;
-            const uint8_t *p = camera_buffer_.data();
-            const size_t n = camera_buffer_.size();
-            const uint8_t b0 = n > 0 ? p[0] : 0;
-            const uint8_t b1 = n > 1 ? p[1] : 0;
-            const uint8_t bm2 = n >= 2 ? p[n - 2] : 0;
-            const uint8_t bm1 = n >= 1 ? p[n - 1] : 0;
-            __android_log_print(
-                ANDROID_LOG_INFO, "useeplus-core",
-                "emit cam%u fid=%u size=%zu first=%02x%02x last=%02x%02x",
-                cn, cam_header_.fid, n, b0, b1, bm2, bm1);
-        }
         CapturedFrame frame = {
             .jpeg = camera_buffer_,
-            .source_id = cn,
             .frame_id = frame_id_++,
             .timestamp_us = now_us(),
         };
@@ -250,14 +225,8 @@ class UPPCameraParser {
 
 public:
     UPPCameraParser(FrameCallback frame_callback,
-                    ButtonCallback button_callback,
-                    std::atomic<uint8_t> &target_cam_num,
-                    std::atomic<uint32_t> &packets_cam0,
-                    std::atomic<uint32_t> &packets_cam1)
-        : target_cam_num_(target_cam_num),
-          packets_cam0_(packets_cam0),
-          packets_cam1_(packets_cam1),
-          frame_callback_(std::move(frame_callback)),
+                    ButtonCallback button_callback)
+        : frame_callback_(std::move(frame_callback)),
           button_callback_(std::move(button_callback)) {}
 
     void flush_pending() { emit_frame(); }
@@ -292,43 +261,18 @@ public:
         upp_cam_frame_t cam_part = {};
         std::memcpy(&cam_part, data.data() + usb_header_len, cam_header_len);
 
-        // Diagnostic: count every well-formed packet by cam_num.
-        if (cam_part.cam_num == 0) packets_cam0_.fetch_add(1, std::memory_order_relaxed);
-        else if (cam_part.cam_num == 1) packets_cam1_.fetch_add(1, std::memory_order_relaxed);
-
-        // One-shot header log per cam, for reverse-engineering.
-        if (cam_part.cam_num < 2 && !logged_first_[cam_part.cam_num]) {
-            logged_first_[cam_part.cam_num] = true;
-            __android_log_print(
-                ANDROID_LOG_INFO, "useeplus-core",
-                "first cam%u packet: fid=%u has_g=%u button=%u other=%u g_sensor=0x%08x len=%u",
-                cam_part.cam_num, cam_part.fid, cam_part.has_g,
-                cam_part.button_press, cam_part.other, cam_part.g_sensor,
-                frame.length);
-        }
-
-        // Physical endoscope button may be signaled in either lens's packet
-        // stream; honor it regardless of the currently selected cam.
+        // Short-press of the endoscope button surfaces here as button_press=1.
+        // (Long-press is consumed by the firmware to switch lenses; we never
+        // see it.)
         if (cam_part.button_press && button_callback_) {
             button_callback_();
         }
 
-        const uint8_t target = target_cam_num_.load(std::memory_order_relaxed);
-
-        // Discard non-target-cam packets completely. Cam 0 and cam 1 have
-        // independent fid counters, so a cam-0 packet with a "different" fid
-        // would otherwise trigger the emit-on-fid-change logic below and
-        // flush a half-accumulated cam-1 JPEG — which BitmapFactory then
-        // fails to decode. Dropping foreign packets here keeps the
-        // accumulator seeing only one interleaved stream.
-        if (cam_part.cam_num != target) {
+        // Drop packets from the alternate stream. Allowing them through would
+        // confuse the emit-on-fid-change logic below, since cam_num=0 and
+        // cam_num=1 packets carry independent fid counters.
+        if (cam_part.cam_num != TARGET_CAM_NUM) {
             return;
-        }
-
-        // If the target just changed, the buffer may still hold data from
-        // the previous lens. Throw it out rather than splicing.
-        if (!camera_buffer_.empty() && cam_header_.cam_num != target) {
-            camera_buffer_.clear();
         }
 
         if (!camera_buffer_.empty() && cam_header_.fid != cam_part.fid) {
@@ -369,10 +313,9 @@ struct SupercameraCapture::Impl {
     explicit Impl(int usb_fd) : usb(usb_fd) {}
 };
 
-SupercameraCapture::SupercameraCapture(int usb_fd, uint8_t cam_num,
+SupercameraCapture::SupercameraCapture(int usb_fd,
                                        ButtonCallback button_callback)
     : impl_(std::make_unique<Impl>(usb_fd)),
-      target_cam_num_(cam_num),
       button_callback_(std::move(button_callback)) {}
 
 SupercameraCapture::~SupercameraCapture() = default;
@@ -385,8 +328,7 @@ void SupercameraCapture::run(const FrameCallback &frame_callback) {
     }
 
     stop_requested_ = false;
-    UPPCameraParser parser(frame_callback, button_callback_,
-                           target_cam_num_, packets_cam0_, packets_cam1_);
+    UPPCameraParser parser(frame_callback, button_callback_);
     ByteVector read_buf;
 
     while (!stop_requested_) {

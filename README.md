@@ -8,8 +8,6 @@ USEEPLUS endoscopes (USB IDs `2ce3:3828` and `0329:2022`) use a proprietary USB 
 
 ## Status
 
-**v0.1** — scaffolded, not yet tested on a real device.
-
 | Feature | Status |
 | --- | --- |
 | USB host permission + device enumeration | done |
@@ -17,11 +15,13 @@ USEEPLUS endoscopes (USB IDs `2ce3:3828` and `0329:2022`) use a proprietary USB 
 | Live preview (JPEG decode loop) | done |
 | Snapshot to `Pictures/USEEPLUS` | done |
 | "Record" → JPEG sequence in `Pictures/USEEPLUS/rec_<timestamp>/` | done (convert offline with ffmpeg) |
-| On-device H.264 MP4 encoding | **planned** (needs GL input-surface encoder) |
-| Physical button → snapshot | done |
+| Physical button (short-press) → snapshot | done |
 | Multi-device picker | done |
-| LED brightness slider | **stub** — protocol not yet reverse-engineered |
-| Dual-cam (left/right) split view | single-cam only in v0.1 |
+| Dual-lens (forward/side) | hardware-controlled — long-press the endoscope's button |
+| LED brightness | hardware-controlled — physical dial on the plug |
+| On-device H.264 MP4 encoding | planned (needs GL input-surface encoder) |
+
+**Hardware controls live on the endoscope itself, not in the app.** The button on the plug short-presses to snapshot and long-presses to flip between forward and side lens; the LED ring brightness has its own dial. The vendor app's own dual-lens-switching command exists in the binary (`BB AA 0B 00 02 …`) but is dead code — the hardware does the routing internally and our app just streams whichever lens is currently active.
 
 ## Install
 
@@ -86,7 +86,6 @@ plumbing required to feed a MediaCodec input surface. Planned for v0.2.
 
 ## Known open questions
 
-- **LED brightness / control commands** — none of the three reference repos have reverse-engineered control commands. The slider is a visible stub. If you capture the vendor app's USB traffic (`usbmon` on Linux while sliding the in-app brightness), that would fill this in.
 - **Higher resolution** — the camera ships 640×480 despite advertised higher resolutions; may or may not be unlockable via a control command.
 - **Init sequence variance** — hbens + jmz3 send `FF 55 FF 55 EE 10` to endpoint 2 on interface 0 *and* `BB AA 05 00 00` to endpoint 1 on interface 1. ollyoid only sends the second. If the full sequence fails on your firmware variant, try commenting out the EP2 write in `supercamera_core.cpp`.
 

@@ -57,16 +57,15 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/camToggleBtn"
-                style="?attr/materialButtonOutlinedStyle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:minWidth="80dp"
-                android:text="Cam 1" />
         </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="#B3FFFFFF"
+            android:textSize="12sp"
+            android:text="@string/hardware_help" />
 
         <LinearLayout
             android:layout_width="match_parent"
